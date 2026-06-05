@@ -1,0 +1,24 @@
+# Caddy terminates TLS for the client's subdomain and reverse-proxies to Flowise.
+# DOMAIN is injected from the environment (set in .env, passed via docker-compose).
+# Automatic HTTPS: Caddy obtains + renews a Let's Encrypt cert for {$DOMAIN}.
+# Requirements: DNS A/AAAA for {$DOMAIN} -> this VM, and ports 80 + 443 reachable.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Flowise is only reachable on the internal compose network; never published directly.
+	reverse_proxy flowise:3000
+
+	# Reasonable security headers for the builder UI (which sits behind Flowise's own auth).
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

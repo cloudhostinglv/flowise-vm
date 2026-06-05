@@ -1,0 +1,91 @@
+# Flowise (Apache-2.0 community build) on a per-client single-tenant VM.
+# Web UI is NOT published directly; Caddy terminates TLS on 80/443 and reverse-proxies to it.
+#
+# Re-verify the pinned image tag before baking the golden image:
+#   https://hub.docker.com/r/flowiseai/flowise/tags
+# As of 2026-06-05 the latest stable numeric tag is 3.1.2 (== :latest, 2026-04-14).
+
+services:
+  flowise:
+    # PINNED — never use :latest. Re-verify before each bake.
+    image: flowiseai/flowise:3.1.2
+    container_name: flowise
+    restart: unless-stopped
+    # Load per-client secrets/config written by cloud-init. Compose interpolates
+    # ${...} below from this same file, and the container also receives it via env_file.
+    env_file:
+      - .env
+    environment:
+      # Core
+      PORT: "3000"
+      # SQLite lives under the persisted volume mounted at /root/.flowise.
+      DATABASE_TYPE: sqlite
+      DATABASE_PATH: /root/.flowise
+      SECRETKEY_PATH: /root/.flowise
+      BLOB_STORAGE_PATH: /root/.flowise/storage
+      LOG_PATH: /root/.flowise/logs
+      APP_URL: "https://${DOMAIN}"
+      # --- Auth / crypto (per-VM, injected via .env) ---
+      # v3 uses a Passport account system: an admin account is registered on first
+      # boot (see seed-credential.sh). These secrets must be set so tokens/credentials
+      # are not signed with insecure defaults, and so the encryption key is stable
+      # (which makes a pre-encrypted credential portable across re-bakes).
+      FLOWISE_SECRETKEY_OVERWRITE: "${FLOWISE_SECRETKEY_OVERWRITE}"
+      JWT_AUTH_TOKEN_SECRET: "${JWT_AUTH_TOKEN_SECRET}"
+      JWT_REFRESH_TOKEN_SECRET: "${JWT_REFRESH_TOKEN_SECRET}"
+      TOKEN_HASH_SECRET: "${TOKEN_HASH_SECRET}"
+      EXPRESS_SESSION_SECRET: "${EXPRESS_SESSION_SECRET}"
+      # Cookies are served over HTTPS via Caddy.
+      SECURE_COOKIES: "true"
+      # Expire all auth tokens on restart (defence-in-depth for a single-tenant box).
+      EXPIRE_AUTH_TOKENS_ON_RESTART: "true"
+      # --- Hardening ---
+      # Do NOT enable ALLOW_BUILTIN_DEP. Leaving it false keeps the custom-tool
+      # NodeVM sandbox restrictive (relevant to CVE-2025-34267 and related escapes).
+      ALLOW_BUILTIN_DEP: "false"
+      # Trust exactly one upstream proxy hop (Caddy) for correct client IPs / rate limiting.
+      NUMBER_OF_PROXIES: "1"
+      TRUST_PROXY: "true"
+      DISABLE_FLOWISE_TELEMETRY: "true"
+    volumes:
+      # Named volume for Flowise home (SQLite DB, encryption key, storage, logs).
+      - flowise_data:/root/.flowise
+    # Internal-only: reachable on the compose network as flowise:3000 and on the
+    # host loopback for the first-boot seed script. NOT exposed on 0.0.0.0.
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    # No docker.sock is mounted anywhere — the agent runtime must never reach the host daemon.
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: caddy
+    restart: unless-stopped
+    depends_on:
+      - flowise
+    environment:
+      # Caddyfile reads {$DOMAIN} for the site address + ACME.
+      DOMAIN: "${DOMAIN}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  flowise_data:
+  caddy_data:
+  caddy_config:

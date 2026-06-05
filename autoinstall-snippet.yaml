@@ -1,0 +1,39 @@
+# cloud-init drop-in for provisioning a per-client Flowise VM.
+# {placeholder} tokens are substituted by the autoinstall pipeline at provision time,
+# matching the existing convention ({avots_key}, {domain}, {admin_password}).
+#
+# Assumes a baked golden image where:
+#   - Docker + compose plugin are installed
+#   - flowiseai/flowise:3.1.2 and caddy:2.8-alpine are pre-pulled
+#   - this dir's files live in /opt/flowise/  (docker-compose.yml, Caddyfile, seed-credential.sh)
+#
+# The autoinstall pipeline is also expected to generate the per-VM secrets below.
+# If it cannot generate them, replace each {gen_hex32_*} with `openssl rand -hex 32` output.
+
+write_files:
+  - path: /opt/flowise/.env
+    owner: root:root
+    permissions: '0640'
+    content: |
+      DOMAIN={domain}
+
+      AVOTS_API_KEY={avots_key}
+      AVOTS_BASE_URL=https://api.avots.ai/openai/v1
+
+      ADMIN_EMAIL={admin_email}
+      ADMIN_NAME={admin_name}
+      ADMIN_PASSWORD={admin_password}
+
+      FLOWISE_SECRETKEY_OVERWRITE={gen_hex32_secretkey}
+      JWT_AUTH_TOKEN_SECRET={gen_hex32_jwt_auth}
+      JWT_REFRESH_TOKEN_SECRET={gen_hex32_jwt_refresh}
+      TOKEN_HASH_SECRET={gen_hex32_token_hash}
+      EXPRESS_SESSION_SECRET={gen_hex32_session}
+
+runcmd:
+  - [ chmod, '0755', /opt/flowise/seed-credential.sh ]
+  # Bring the stack up (Flowise + Caddy). Compose reads /opt/flowise/.env.
+  - [ docker, compose, -f, /opt/flowise/docker-compose.yml, up, -d ]
+  # Seed the avots credential once Flowise is healthy. The script waits for readiness,
+  # registers the admin, logs in, and POSTs the openAIApi credential. Idempotent.
+  - [ 'bash', '-lc', 'set -a; . /opt/flowise/.env; set +a; /opt/flowise/seed-credential.sh >> /var/log/flowise-seed.log 2>&1 || true' ]
