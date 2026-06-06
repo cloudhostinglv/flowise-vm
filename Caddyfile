@@ -1,22 +1,57 @@
-# Caddy terminates TLS for the client's subdomain and reverse-proxies to Flowise.
-# DOMAIN is injected from the environment (set in .env, passed via docker-compose).
-# Automatic HTTPS: Caddy obtains + renews a Let's Encrypt cert for {$DOMAIN}.
-# Requirements: DNS A/AAAA for {$DOMAIN} -> this VM, and ports 80 + 443 reachable.
+# Caddy terminates TLS for ${PANEL_DOMAIN} and serves TWO surfaces on the SAME
+# hostname under ONE auto Let's Encrypt cert (CONVENTION across all products):
+#
+#   :443  -> the Flowise builder UI            (flowise:3000)  <- "Open Flowise"
+#   :8443 -> the branded CloudHosting AI Panel (panel:8080)    <- panel is ALWAYS :8443
+#
+# Flowise is a BUILDER: the client configures the provider/key inside Flowise's own
+# UI. The panel (on :8443) is a login-gated landing that links into Flowise via its
+# "Open Flowise" button (-> https://${PANEL_DOMAIN}, i.e. :443).
+#
+# PANEL_DOMAIN is injected from the environment (compose passes it through). On first
+# boot firstboot.sh derives it from the primary IPv4 if blank. Needs an A-record for
+# ${PANEL_DOMAIN} -> this VM and ports 80 + 443 + 8443 reachable.
 
-{$DOMAIN} {
+{
+	email admin@cloudhosting.lv
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory   # uncomment while testing
+}
+
+# --- :443 — the Flowise product UI ----------------------------------------- #
+{$PANEL_DOMAIN}:443 {
 	encode zstd gzip
-
-	# Flowise is only reachable on the internal compose network; never published directly.
 	reverse_proxy flowise:3000
-
-	# Reasonable security headers for the builder UI (which sits behind Flowise's own auth).
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		-Server
 	}
+	log {
+		output stdout
+		format console
+	}
+}
 
+# --- :8443 — the branded CloudHosting AI Panel ----------------------------- #
+{$PANEL_DOMAIN}:8443 {
+	encode zstd gzip
+	reverse_proxy panel:8080 {
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 30s
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	request_body {
+		max_size 256KB
+	}
 	log {
 		output stdout
 		format console

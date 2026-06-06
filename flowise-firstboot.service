@@ -1,0 +1,18 @@
+# First-boot provisioning oneshot for the Flowise per-client VM.
+# Installed + enabled by autoinstall-snippet.yaml. Runs firstboot.sh ONCE after docker
+# + networking are up: generates per-VM Flowise secrets, derives PANEL_DOMAIN, pulls +
+# starts the stack (flowise + panel + caddy), then disables itself.
+
+[Unit]
+Description=Flowise VM first-boot provisioning (product + panel + TLS)
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+ConditionPathExists=/opt/flowise-vm/firstboot.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/flowise-vm/firstboot.sh
+
+[Install]
+WantedBy=multi-user.target
