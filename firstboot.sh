@@ -74,6 +74,29 @@ fi
 log "docker compose pull"; docker compose -f "${COMPOSE_FILE}" pull
 log "docker compose up -d"; docker compose -f "${COMPOSE_FILE}" up -d
 
+# --- 4b. Install the host-side software updater (panel "Update software" button) -----
+# The panel (unprivileged) writes ./paneldata/.update-request; this host updater
+# git-pulls the repo + docker compose pull/up. No applier (builders need no restart).
+log "Installing updater units"
+APPLIER_LIB="/usr/local/lib/cloudhosting"
+install -d -m 0755 "${APPLIER_LIB}"
+install -m 0755 "${APP_DIR}/applier/update.sh" "${APPLIER_LIB}/update.sh"
+cp "${APP_DIR}/applier/cloudhosting-updater.path"    /etc/systemd/system/
+cp "${APP_DIR}/applier/cloudhosting-updater.service" /etc/systemd/system/
+cat > /etc/cloudhosting-panel.env <<EOF
+PRODUCT=flowise
+COMPOSE_FILE=${COMPOSE_FILE}
+COMPOSE_PROJECT_DIR=${APP_DIR}
+REPO_DIR=${APP_DIR}
+DATA_DIR=${APP_DIR}/paneldata
+UPDATE_BRANCH=main
+EOF
+chmod 0644 /etc/cloudhosting-panel.env
+systemctl daemon-reload
+systemctl enable --now cloudhosting-updater.path
+log "Updater enabled (watching ${APP_DIR}/paneldata/.update-request)"
+"${APPLIER_LIB}/update.sh" --stamp-only || log "WARN: initial version stamp failed"
+
 # --- 5. Disable this oneshot --------------------------------------------------------
 log "Disabling flowise-firstboot.service (provisioning complete)"
 systemctl disable flowise-firstboot.service 2>/dev/null || true
